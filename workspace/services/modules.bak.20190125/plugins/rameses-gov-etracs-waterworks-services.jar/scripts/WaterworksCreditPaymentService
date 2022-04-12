@@ -1,0 +1,66 @@
+import com.rameses.annotations.*;
+
+class WaterworksCreditPaymentService {
+	
+	@Service("BillingProcessService")
+	def billSvc;
+
+	@Service("PaymentPostingService")
+	def paySvc;
+
+	@Service("SequenceService")
+	def seqSvc;
+
+	@Service("DateService")
+	def dateSvc;
+
+	@Service("PaymentPostingHandler")
+	def payPostHandler;
+
+	@Service("BillingInfoHandler")
+	def handler;
+
+	@Env
+	def env;
+
+	@DataContext(dynamic=true)
+	def em;
+
+	@DataContext("waterworks_credit")
+	def creditEm;
+
+	@ProxyMethod
+	public def post( def o ) {
+		def m = [rulename:'waterworksbilling', txntype:'waterworks']; 
+		
+		def pa = [rulename: m.rulename, headerinfo: [acctid: o.acctid] ];
+		def creditItems = handler.getCreditItems( pa );
+		def amt = creditItems.sum{ it.amount };
+		creditItems.each {
+			creditEm.find( [objid: it.objid ] ).update( [amtpaid: it.amount ]);
+		}
+	
+		def pp = [rulename:m.rulename, txntype:m.txntype];
+		pp.options = [include_credit: false, include_items: true];
+		pp.params = [objid: o.acctid, amtpaid: amt ];
+		def bill = billSvc.process( pp ); 
+
+		def m = [:]; 
+		m.putAll( pp );
+		m.putAll( bill ); 
+
+		def payinfo = payPostHandler.getPaymentInfo( m ); 
+		if ( !payinfo._schemaname ) throw new Exception("payinfo._schemaname is required");
+		if ( !payinfo.items ) throw new Exception('payinfo.items is required'); 
+
+		payinfo.refno = 'WC' + seqSvc.getNextFormattedSeries('WATERWORKS_CREDIT'); 
+		payinfo.refdate = dateSvc.getServerDate(); 
+		payinfo.txnmode = 'ONLINE';
+		payinfo.reftype = 'creditpayment';
+		payinfo.amount = bill.amount; 
+		paySvc.post( payinfo ); 
+		return payinfo;
+	}
+
+
+}
